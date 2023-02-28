@@ -2,52 +2,65 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
 )
 
-func worker(id int, jobs <-chan int, results chan<- int) {
-	for j := range jobs {
-		fmt.Println("worker", id, "started job", j)
-		time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
-		fmt.Println("worker", id, "finished job", j)
-		results <- j * 2
+func scrapeWebsite(url string, wg *sync.WaitGroup, results chan<- string) {
+	// Decrement the WaitGroup counter when the function completes
+	defer wg.Done()
+
+	// Send a GET request to the website
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Printf("Error scraping %s: %s\n", url, err)
+		return
 	}
-}
+	defer resp.Body.Close()
 
-func fanOut(jobs <-chan int, workerCount int) <-chan int {
-	results := make(chan int)
-
-	for i := 0; i < workerCount; i++ {
-		go worker(i, jobs, results)
+	// Read the response body into a string
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("Error scraping %s: %s\n", url, err)
+		return
 	}
+	bodyString := string(bodyBytes)
 
-	go func() {
-		for {
-			select {
-			case <-time.After(2 * time.Second):
-				close(results)
-				return
-			}
-		}
-	}()
+	// Find and extract the desired data from the HTML
+	// (Assuming the data is contained in a <div> tag with class="data")
+	dataStart := strings.Index(bodyString, "<div class=\"data\">") + len("<div class=\"data\">")
+	dataEnd := strings.Index(bodyString, "</div>")
+	data := bodyString[dataStart:dataEnd]
 
-	return results
+	// Send the data to the results channel
+	results <- data
 }
 
 func main() {
-	const jobCount = 10
+	urls := []string{"http://example.com", "http://example.org", "http://example.net"}
 
-	jobs := make(chan int, jobCount)
-	results := fanOut(jobs, 3)
+	// Create a WaitGroup to keep track of the workers
+	var wg sync.WaitGroup
+	wg.Add(len(urls))
 
-	for j := 1; j <= jobCount; j++ {
-		jobs <- j
+	// Create a results channel to collect the scraped data
+	results := make(chan string, len(urls))
+
+	// Start a separate goroutine for each website URL
+	for _, url := range urls {
+		go scrapeWebsite(url, &wg, results)
 	}
 
-	close(jobs)
+	// Wait for all workers to complete
+	wg.Wait()
 
-	for r := range results {
-		fmt.Println("result:", r)
+	// Close the results channel to signal that all data has been sent
+	close(results)
+
+	// Read the scraped data from the results channel
+	for data := range results {
+		fmt.Printf("Scraped data: %s\n", data)
 	}
 }
